@@ -12,15 +12,12 @@ export class CurrencyController {
   }
 
   @Get('latest')
-  getLatest(@Query('base') base: string) {
+  getLatest(@Query('base') base?: string) {
     return this.service.getLatest(base);
   }
 
   @Get('historical')
-  getHistorical(
-    @Query('base') base: string,
-    @Query('date') date: string,
-  ) {
+  getHistorical(@Query('base') base?: string, @Query('date') date?: string) {
     return this.service.getHistorical(base, date);
   }
 }
