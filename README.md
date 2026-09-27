@@ -1,98 +1,112 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Currency Backend API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+[![CI](https://github.com/Sami123d/Currency-Backend-Api/actions/workflows/ci.yml/badge.svg)](https://github.com/Sami123d/Currency-Backend-Api/actions/workflows/ci.yml)
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+A small NestJS 11 API that proxies [freecurrencyapi.com](https://freecurrencyapi.com) so the API key stays on the server. It serves the currency list, latest rates and historical rates to the Angular frontend, [Currency-App](https://github.com/Sami123d/Currency-App).
 
-## Description
+**Deployed at:** https://currency-backend-api.vercel.app. On 2026-09-27, `/currency/currencies`, `/currency/latest` and `/currency/historical` all returned live data. The root path returns `Hello World!` and works as a basic liveness check.
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+![Currency-App frontend using this API](https://raw.githubusercontent.com/Sami123d/Currency-App/master/docs/screenshots/converter.png)
 
-## Project setup
+## Status
 
-```bash
-$ npm install
+Working and deployed. It is a thin proxy with input validation and error mapping. There is no database, no auth, no caching and no rate limiting.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  FE["Currency-App<br/>(Angular SPA on Vercel)"]
+  subgraph Nest["NestJS app (Vercel)"]
+    M[main.ts<br/>enableCors: all origins]
+    AC["AppController<br/>GET / → Hello World!"]
+    CC["CurrencyController<br/>/currency/currencies<br/>/currency/latest<br/>/currency/historical"]
+    CS["CurrencyService<br/>validate base/date<br/>map provider errors → 400 / 502"]
+    CFG["ConfigModule<br/>CURRENCY_API_KEY"]
+    CC --> CS
+    CFG --> CS
+  end
+  EXT[("api.freecurrencyapi.com/v1")]
+  FE -- HTTPS GET --> CC
+  CS -- "@nestjs/axios HttpService<br/>?apikey=…" --> EXT
 ```
 
-## Compile and run the project
+Request flow: the controller reads the query parameters and `CurrencyService` checks them. It then calls the matching freecurrencyapi.com v1 endpoint with the `apikey` query parameter and returns the provider's JSON body without changing it.
 
-```bash
-# development
-$ npm run start
+## API reference
 
-# watch mode
-$ npm run start:dev
+No endpoint needs authentication. CORS is enabled for all origins (`app.enableCors()`).
 
-# production mode
-$ npm run start:prod
+| Method | Path | Query | Purpose | Upstream call |
+| --- | --- | --- | --- | --- |
+| GET | `/` | none | Liveness check, returns `Hello World!` | none |
+| GET | `/currency/currencies` | none | Supported currencies (code, name, symbol, decimals) | `GET /v1/currencies` |
+| GET | `/currency/latest` | `base` (optional, 3-letter code, case-insensitive; the provider defaults to USD) | Latest rates for `base` | `GET /v1/latest?base_currency=` |
+| GET | `/currency/historical` | `base` (optional), `date` (optional, `YYYY-MM-DD`; the provider defaults to yesterday) | Rates for `base` on `date` | `GET /v1/historical?base_currency=&date=` |
+
+Example responses (provider format, passed through unchanged):
+
+```jsonc
+// GET /currency/latest?base=USD
+{ "data": { "EUR": 0.8779, "GBP": 0.7549, "INR": 95.828, ... } }
+
+// GET /currency/historical?base=USD&date=2025-01-02
+{ "data": { "2025-01-02": { "EUR": 0.9738, "GBP": 0.8077, ... } } }
 ```
 
-## Run tests
+Errors:
+
+| Status | When |
+| --- | --- |
+| 400 | `base` is not a 3-letter code, `date` is not `YYYY-MM-DD`, or the provider rejected the input (400/422), for example an unknown currency or a future date. The provider's message is passed on (currently `"Validation error"`). |
+| 502 | The provider call failed for another reason: invalid or missing API key, quota, provider 5xx, or a network error. |
+
+> Before this change, provider errors (for example `?base=XYZ`) came back as a generic `500 Internal server error`.
+
+**Swagger:** not added. The endpoint surface is three GET routes, and serving Swagger UI's static assets from a Vercel serverless function tends to break. The table above is the reference.
+
+## Tech stack
+
+NestJS 11 (Express platform), `@nestjs/config`, `@nestjs/axios` (axios), RxJS, TypeScript. Tests use Jest, ts-jest and Supertest. Deployed on Vercel.
+
+## Environment variables
+
+| Name | Required | Purpose |
+| --- | --- | --- |
+| `CURRENCY_API_KEY` | yes | freecurrencyapi.com API key, sent as the `apikey` query parameter |
+| `PORT` | no | Local listen port (default `3000`) |
+
+Copy `.env.example` to `.env` for local development. `ConfigModule` loads it.
+
+## Getting started
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+npm install
+cp .env.example .env   # add your freecurrencyapi.com key
+npm run start:dev      # http://localhost:3000
+curl "http://localhost:3000/currency/latest?base=EUR"
 ```
+
+## Testing
+
+```bash
+npm test          # unit: CurrencyService with HttpService/ConfigService mocked
+npm run test:e2e  # e2e: real AppModule over HTTP (Supertest), HttpService overridden
+```
+
+No test calls the real provider.
+
+- **Unit tests (`src/currency/currency.service.spec.ts`)** check the upstream URL, API key and parameter mapping, that `base` is upper-cased, that malformed input is rejected before any upstream call, and that errors are mapped (422 to 400 with the provider message, 401 or network errors to 502).
+- **E2E tests (`test/app.e2e-spec.ts`)** send requests through the real routing, check the passed-through payloads, and check the 400 and 502 responses.
+
+CI runs lint, build, unit and e2e tests on every push and PR.
 
 ## Deployment
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+The API is deployed on Vercel. There is no `vercel.json`: Vercel detects the NestJS project and runs `src/main.ts`. `CURRENCY_API_KEY` is set in the Vercel project settings. Pushing to `master` triggers a deploy.
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+## Roadmap
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+- Cache the currency list and daily rates. The data changes slowly, and caching would cut provider quota use.
+- Restrict CORS to the frontend origin.
+- Add a proper health endpoint in place of the `Hello World!` root.
